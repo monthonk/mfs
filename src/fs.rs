@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use aws_sdk_s3::Client;
 use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    Request,
+    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
 use libc::ENOENT;
 use std::ffi::OsStr;
@@ -47,7 +47,19 @@ const HELLO_TXT_ATTR: FileAttr = FileAttr {
     blksize: 512,
 };
 
-pub struct MFS;
+pub struct MFS {
+    client: Client,
+    bucket_name: String,
+}
+
+impl MFS {
+    pub fn new(client: Client, bucket_name: String) -> MFS {
+        MFS {
+            client,
+            bucket_name,
+        }
+    }
+}
 
 #[async_trait]
 impl Filesystem for MFS {
@@ -85,12 +97,19 @@ impl Filesystem for MFS {
         }
     }
 
-    async fn readdir(&self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
+    async fn readdir(
+        &self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
         if ino != 1 {
             reply.error(ENOENT);
             return;
         }
-
+        
         let entries = vec![
             (1, FileType::Directory, "."),
             (1, FileType::Directory, ".."),
