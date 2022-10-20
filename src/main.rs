@@ -52,12 +52,41 @@ struct MFS;
 
 #[async_trait]
 impl Filesystem for MFS {
+    async fn lookup(&self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        if parent == 1 && name.to_str() == Some("hello.txt") {
+            reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
+        } else {
+            reply.error(ENOENT);
+        }
+    }
+
     async fn getattr(&self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
         match ino {
             1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
             2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
             _ => reply.error(ENOENT),
         }
+    }
+
+    async fn readdir(&self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
+        if ino != 1 {
+            reply.error(ENOENT);
+            return;
+        }
+
+        let entries = vec![
+            (1, FileType::Directory, "."),
+            (1, FileType::Directory, ".."),
+            (2, FileType::RegularFile, "hello.txt"),
+        ];
+
+        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            // i + 1 means the index of the next entry
+            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
+                break;
+            }
+        }
+        reply.ok();
     }
 }
 
