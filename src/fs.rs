@@ -52,6 +52,12 @@ pub struct MFS {
     bucket_name: String,
 }
 
+struct DirEntry {
+    full_key: String,
+    name: String,
+    children: Vec<FileAttr>
+}
+
 impl MFS {
     pub fn new(client: Client, bucket_name: String) -> MFS {
         MFS {
@@ -109,7 +115,25 @@ impl Filesystem for MFS {
             reply.error(ENOENT);
             return;
         }
-        
+
+        let client = &self.client;
+        let bucket_name = &self.bucket_name;
+        let prefix = "read-only-mount-test/";
+        let prefix_len = prefix.len();
+
+        let objects = client.list_objects_v2().bucket(bucket_name).prefix(prefix).send().await.unwrap();
+        for obj in objects.contents().unwrap_or_default() {
+            let full_key = obj.key().unwrap();
+            let mut key = full_key.clone();
+            key = &key[prefix_len..];
+
+            if key == "" || key.contains("/") {
+                // this key is itself or a sub directory
+                continue;
+            }
+            println!("{:?}", key);
+        }
+
         let entries = vec![
             (1, FileType::Directory, "."),
             (1, FileType::Directory, ".."),

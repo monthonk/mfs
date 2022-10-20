@@ -20,7 +20,6 @@ async fn main() -> Result<(), s3::Error> {
     let region_provider = RegionProviderChain::first_try(Region::new(region))
         .or_default_provider()
         .or_else(Region::new("us-east-1"));
-    dbg!(&region_provider);
 
     let config = aws_config::from_env().region(region_provider).load().await;
     let client = s3::Client::new(&config);
