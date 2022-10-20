@@ -55,7 +55,7 @@ pub struct MFS {
 struct DirEntry {
     full_key: String,
     name: String,
-    children: Vec<FileAttr>
+    file_type: FileType,
 }
 
 impl MFS {
@@ -70,7 +70,10 @@ impl MFS {
 #[async_trait]
 impl Filesystem for MFS {
     async fn lookup(&self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        println!("getattr parent={parent} name={:?}", name);
         if parent == 1 && name.to_str() == Some("test") {
+            reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
+        } else if parent == 1 && name.to_str() == Some("s3-file-connector") {
             reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
         } else {
             reply.error(ENOENT);
@@ -78,9 +81,11 @@ impl Filesystem for MFS {
     }
 
     async fn getattr(&self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
+        println!("getattr ino={ino}");
         match ino {
             1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
             2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
+            3 => reply.attr(&TTL, &HELLO_TXT_ATTR),
             _ => reply.error(ENOENT),
         }
     }
@@ -111,6 +116,7 @@ impl Filesystem for MFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
+        println!("readdir ino={ino} offset={offset}");
         if ino != 1 {
             reply.error(ENOENT);
             return;
@@ -122,8 +128,8 @@ impl Filesystem for MFS {
         let prefix_len = prefix.len();
         let mut continuation_token:Option<String> = None;
 
+        let mut entries: Vec<DirEntry> = Vec::new();
         loop {
-            println!("continuation token is {:?}", &continuation_token);
             let mut list_object = client.list_objects_v2().bucket(bucket_name).prefix(prefix);
             if let Some(token) = &continuation_token {
                 list_object= list_object.continuation_token(token);
@@ -132,7 +138,6 @@ impl Filesystem for MFS {
 
             for obj in objects.contents().unwrap_or_default() {
                 let full_key = obj.key().unwrap();
-                // println!("full_key:{:?}", &full_key);
                 let mut key = full_key.clone();
                 key = &key[prefix_len..];
 
@@ -140,7 +145,12 @@ impl Filesystem for MFS {
                     // this key is itself or a sub directory
                     continue;
                 }
-                println!("{:?}", key);
+                let entry = DirEntry {
+                    full_key: String::from(full_key),
+                    name: String::from(key),
+                    file_type: FileType::RegularFile,
+                };
+                entries.push(entry);
             }
 
             if let Some(next_token) = objects.next_continuation_token() {
@@ -150,17 +160,19 @@ impl Filesystem for MFS {
             }
         }
 
-        let entries = vec![
-            (1, FileType::Directory, "."),
-            (1, FileType::Directory, ".."),
-            (2, FileType::RegularFile, "test"),
-        ];
+        // let entries = vec![
+        //     (1, FileType::Directory, "."),
+        //     (1, FileType::Directory, ".."),
+        //     (2, FileType::RegularFile, "test"),
+        // ];
 
+        let mut ino = 2;
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
             // i + 1 means the index of the next entry
-            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
+            if reply.add(ino, (i + 1) as i64, entry.file_type, entry.name) {
                 break;
             }
+            ino += 1;
         }
         reply.ok();
     }
