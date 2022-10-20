@@ -1,10 +1,13 @@
 use async_trait::async_trait;
+use aws_sdk_s3::model::Object;
 use aws_sdk_s3::Client;
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
 use libc::ENOENT;
+use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 const TTL: Duration = Duration::from_secs(1); // 1 second
@@ -50,27 +53,71 @@ const HELLO_TXT_ATTR: FileAttr = FileAttr {
 pub struct MFS {
     client: Client,
     bucket_name: String,
+    ino_map: HashMap<u64, Inode>,
+    next_ino: AtomicU64,
 }
 
-struct DirEntry {
-    full_key: String,
+struct Inode {
+    ino: u64,
     name: String,
-    file_type: FileType,
+    file_attr: FileAttr,
+}
+
+impl Inode {
+    pub fn new(ino: u64, name: String, object: &Object, kind: FileType) -> Inode {
+        Inode {
+            ino,
+            name,
+            file_attr: FileAttr {
+                ino,
+                size: object.size() as u64,
+                blocks: 1,
+                atime: UNIX_EPOCH,
+                mtime: UNIX_EPOCH,
+                ctime: UNIX_EPOCH,
+                crtime: UNIX_EPOCH,
+                kind: kind,
+                perm: 0o644,
+                nlink: 1,
+                uid: 501,
+                gid: 20,
+                rdev: 0,
+                blksize: 512,
+                flags: 0,
+            },
+        }
+    }
 }
 
 impl MFS {
     pub fn new(client: Client, bucket_name: String) -> MFS {
+        let root_ino = 1;
+        let mut ino_map = HashMap::new();
+        ino_map.insert(
+            root_ino,
+            Inode {
+                ino: root_ino,
+                name: String::from(""),
+                file_attr: HELLO_DIR_ATTR,
+            },
+        );
         MFS {
             client,
             bucket_name,
+            ino_map,
+            next_ino: AtomicU64::new(root_ino),
         }
+    }
+
+    pub fn next_ino(&self) -> u64 {
+        return self.next_ino.fetch_add(1, Ordering::SeqCst);
     }
 }
 
 #[async_trait]
 impl Filesystem for MFS {
     async fn lookup(&self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        println!("getattr parent={parent} name={:?}", name);
+        println!("lookup parent={parent} name={:?}", name);
         if parent == 1 && name.to_str() == Some("test") {
             reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
         } else if parent == 1 && name.to_str() == Some("s3-file-connector") {
@@ -82,11 +129,10 @@ impl Filesystem for MFS {
 
     async fn getattr(&self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
         println!("getattr ino={ino}");
-        match ino {
-            1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
-            2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
-            3 => reply.attr(&TTL, &HELLO_TXT_ATTR),
-            _ => reply.error(ENOENT),
+        let inode = self.ino_map.get(&ino);
+        match inode {
+            Some(node) => reply.attr(&TTL, &node.file_attr),
+            None => reply.error(ENOENT),
         }
     }
 
@@ -126,30 +172,27 @@ impl Filesystem for MFS {
         let bucket_name = &self.bucket_name;
         let prefix = "";
         let prefix_len = prefix.len();
-        let mut continuation_token:Option<String> = None;
+        let mut continuation_token: Option<String> = None;
 
-        let mut entries: Vec<DirEntry> = Vec::new();
+        let mut entries: Vec<Inode> = Vec::new();
         loop {
             let mut list_object = client.list_objects_v2().bucket(bucket_name).prefix(prefix);
             if let Some(token) = &continuation_token {
-                list_object= list_object.continuation_token(token);
+                list_object = list_object.continuation_token(token);
             }
             let objects = list_object.send().await.unwrap();
 
             for obj in objects.contents().unwrap_or_default() {
                 let full_key = obj.key().unwrap();
-                let mut key = full_key.clone();
-                key = &key[prefix_len..];
+                let name = &full_key[prefix_len..];
 
-                if key == "" || key.contains("/") {
+                if name == "" || name.contains("/") {
                     // this key is itself or a sub directory
                     continue;
                 }
-                let entry = DirEntry {
-                    full_key: String::from(full_key),
-                    name: String::from(key),
-                    file_type: FileType::RegularFile,
-                };
+
+                let next_ino = self.next_ino();
+                let entry = Inode::new(next_ino, String::from(name), obj, FileType::RegularFile);
                 entries.push(entry);
             }
 
@@ -160,19 +203,11 @@ impl Filesystem for MFS {
             }
         }
 
-        // let entries = vec![
-        //     (1, FileType::Directory, "."),
-        //     (1, FileType::Directory, ".."),
-        //     (2, FileType::RegularFile, "test"),
-        // ];
-
-        let mut ino = 2;
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
             // i + 1 means the index of the next entry
-            if reply.add(ino, (i + 1) as i64, entry.file_type, entry.name) {
+            if reply.add(entry.ino, (i + 1) as i64, entry.file_attr.kind, entry.name) {
                 break;
             }
-            ino += 1;
         }
         reply.ok();
     }
