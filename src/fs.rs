@@ -118,20 +118,36 @@ impl Filesystem for MFS {
 
         let client = &self.client;
         let bucket_name = &self.bucket_name;
-        let prefix = "read-only-mount-test/";
+        let prefix = "";
         let prefix_len = prefix.len();
+        let mut continuation_token:Option<String> = None;
 
-        let objects = client.list_objects_v2().bucket(bucket_name).prefix(prefix).send().await.unwrap();
-        for obj in objects.contents().unwrap_or_default() {
-            let full_key = obj.key().unwrap();
-            let mut key = full_key.clone();
-            key = &key[prefix_len..];
-
-            if key == "" || key.contains("/") {
-                // this key is itself or a sub directory
-                continue;
+        loop {
+            println!("continuation token is {:?}", &continuation_token);
+            let mut list_object = client.list_objects_v2().bucket(bucket_name).prefix(prefix);
+            if let Some(token) = &continuation_token {
+                list_object= list_object.continuation_token(token);
             }
-            println!("{:?}", key);
+            let objects = list_object.send().await.unwrap();
+
+            for obj in objects.contents().unwrap_or_default() {
+                let full_key = obj.key().unwrap();
+                // println!("full_key:{:?}", &full_key);
+                let mut key = full_key.clone();
+                key = &key[prefix_len..];
+
+                if key == "" || key.contains("/") {
+                    // this key is itself or a sub directory
+                    continue;
+                }
+                println!("{:?}", key);
+            }
+
+            if let Some(next_token) = objects.next_continuation_token() {
+                continuation_token = Some(String::from(next_token));
+            } else {
+                break;
+            }
         }
 
         let entries = vec![
