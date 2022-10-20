@@ -52,7 +52,7 @@ pub struct MFS;
 #[async_trait]
 impl Filesystem for MFS {
     async fn lookup(&self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if parent == 1 && name.to_str() == Some("hello.txt") {
+        if parent == 1 && name.to_str() == Some("test") {
             reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
         } else {
             reply.error(ENOENT);
@@ -94,7 +94,7 @@ impl Filesystem for MFS {
         let entries = vec![
             (1, FileType::Directory, "."),
             (1, FileType::Directory, ".."),
-            (2, FileType::RegularFile, "hello.txt"),
+            (2, FileType::RegularFile, "test"),
         ];
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {

@@ -2,7 +2,7 @@ use std::{fs::File, io::Read};
 use std::io::{SeekFrom, Seek};
 
 fn main() {
-    let mut f = File::open("mnt/hello.txt")
+    let mut f = File::open("mnt/test")
         .expect("Should have been able to open the file");
     
     read(&mut f, 5, 5);
