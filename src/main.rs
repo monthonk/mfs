@@ -68,6 +68,24 @@ impl Filesystem for MFS {
         }
     }
 
+    async fn read(
+        &self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        _size: u32,
+        _flags: i32,
+        _lock: Option<u64>,
+        reply: ReplyData,
+    ) {
+        if ino == 2 {
+            reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
+        } else {
+            reply.error(ENOENT);
+        }
+    }
+
     async fn readdir(&self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
         if ino != 1 {
             reply.error(ENOENT);
