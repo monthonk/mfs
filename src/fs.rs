@@ -42,18 +42,18 @@ pub struct MFS {
 
 #[derive(Debug)]
 struct Inode {
-    parent: u64,
     ino: u64,
     name: String,
+    children: HashMap<String, u64>,
     file_attr: FileAttr,
 }
 
 impl Inode {
-    pub fn new(parent: u64, ino: u64, name: String, object: &Object, kind: FileType) -> Inode {
+    pub fn new(ino: u64, name: String, object: &Object, kind: FileType) -> Inode {
         Inode {
-            parent,
             ino,
             name,
+            children: HashMap::new(),
             file_attr: FileAttr {
                 ino,
                 size: object.size() as u64,
@@ -73,6 +73,11 @@ impl Inode {
             },
         }
     }
+
+    pub fn add_child(&mut self, child_name: String, child_ino: u64) {
+        let children = &mut self.children;
+        children.insert(child_name, child_ino);
+    }
 }
 
 impl MFS {
@@ -82,9 +87,9 @@ impl MFS {
         ino_map.insert(
             root_ino,
             Inode {
-                parent: 0,
                 ino: root_ino,
                 name: String::from(""),
+                children: HashMap::new(),
                 file_attr: HELLO_DIR_ATTR,
             },
         );
@@ -105,16 +110,19 @@ impl MFS {
 #[async_trait]
 impl Filesystem for MFS {
     async fn lookup(&self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        println!("lookup parent={parent} name={:?}", name);
+        let name = name.to_str().unwrap();
+        println!("lookup parent={parent} name={name}");
         let ino_map_reader = self.ino_map.read().unwrap();
-        for (_, inode) in ino_map_reader.iter() {
-            dbg!(&inode);
-            if parent == inode.parent && name.to_str() == Some(&inode.name) {
-                reply.entry(&TTL, &inode.file_attr, 0);
-                return;
+        if let Some(parent_node) = ino_map_reader.get(&parent) {
+            if let Some(child) = parent_node.children.get(name) {
+                let child_node = ino_map_reader.get(&child).unwrap();
+                reply.entry(&TTL, &child_node.file_attr, 0);
+            } else {
+                reply.error(ENOENT);
             }
+        } else {
+            reply.error(ENOENT);
         }
-        reply.error(ENOENT);
     }
 
     async fn getattr(&self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
@@ -182,13 +190,18 @@ impl Filesystem for MFS {
                     continue;
                 }
 
+                // Create new inode
                 let parent = ino;
-                let next_ino = self.next_ino();
+                let new_ino = self.next_ino();
                 let mut ino_map_writer = self.ino_map.write().unwrap();
-                ino_map_writer.insert(next_ino, Inode::new(parent, next_ino, String::from(name), obj, FileType::RegularFile));
+                ino_map_writer.insert(new_ino, Inode::new(new_ino, String::from(name), obj, FileType::RegularFile));
 
                 // FIXME: use inodes from MFS
-                entries.push(Inode::new(parent, next_ino, String::from(name), obj, FileType::RegularFile));
+                entries.push(Inode::new(new_ino, String::from(name), obj, FileType::RegularFile));
+
+                // Update parent record
+                let parent_node = ino_map_writer.get_mut(&parent).expect("Should have found parent node");
+                parent_node.add_child(String::from(name), new_ino);
             }
 
             if let Some(next_token) = objects.next_continuation_token() {
