@@ -4,7 +4,7 @@ use aws_sdk_s3::Client;
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
-use libc::ENOENT;
+use libc::{ENOENT, EIO};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::RwLock;
@@ -146,8 +146,14 @@ impl Filesystem for MFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        if ino == 2 {
-            reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
+        println!("read ino={ino} offset={offset}");
+        if ino != 1 {
+            let data = &HELLO_TXT_CONTENT.as_bytes();
+            if offset > data.len().try_into().unwrap() {
+                reply.error(EIO);
+            } else {
+                reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
+            }
         } else {
             reply.error(ENOENT);
         }
